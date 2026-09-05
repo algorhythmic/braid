@@ -1,0 +1,35 @@
+# Implementation decisions and remaining work
+
+The supplied `fuse-retrieval-engine.md` is design input, not authority to access consumer repositories or run their jobs. The implementation uses **Braid**, `braid`, and `.braid.db`. No upstream project or trademark availability check has been performed.
+
+## First milestone
+
+Implemented: SQLite/WAL and FTS5; transactional event projection and replay; lexical BM25, brute-force cosine and anchor centroids, anchor-seeded PageRank, recency; weighted RRF, boosts, MMR shortlist, greedy budget packing; CLI and Go library; mandatory explanations. The subprocess interface, explicit embedding reindex, custom cost function, and initial metric harness are also implemented.
+
+Only direct dependencies are `modernc.org/sqlite` and `gopkg.in/yaml.v3`, as requested by the draft. Their transitive dependencies are recorded in `go.mod` and `go.sum`. No external services are needed when embeddings are disabled.
+
+## Resolved ambiguities
+
+- **Graph direction:** the draft says undirected by default but only shows an `undirected` list. Braid follows that default and adds `graph.directed: [type, ...]` for exceptions. A type cannot appear in both lists. PageRank uses 20 iterations with restart-distributed dangling mass. Traversal uses positive edges and existing endpoints. Missing endpoint edges are retained for later node arrival. Explanations show deterministic shortest paths, not a claimed decomposition of PageRank mass.
+- **Recency:** `half_life_hours` uses `exp(-ln(2) * age / half_life)`. The draft's `exp(-age / half_life)` would yield 0.368 instead of 0.5 after one half-life. Future timestamps receive age zero. Optional `temporal.neighborhood: true` restricts recency to the graph neighborhood when anchors are supplied.
+- **Diversity before packing:** Braid selects an MMR shortlist of `candidate_limit` (default 200) from the retriever union, then packs it by boosted score/cost, retaining MMR order for ties. MMR uses `lambda * (boosted / max_boosted) - (1-lambda) * max_similarity`; both terms are on [0,1]. Similarity is nonnegative cosine when both vectors exist, otherwise Jaccard overlap of lowercase Unicode word/number/underscore token sets. Empty text supplies zero redundancy evidence. Type labels do not affect similarity. Raw reported scores and budget packing are unchanged. The shortlist strategy, lambda and lexical fallback still need held-out consumer evaluation; previous grid proposals should be reevaluated with this ranking version.
+- **Budget:** zero is an explicit valid budget. Zero-cost items are allowed; negative or non-finite costs are rejected. Cost priority is custom function, node cost, configured attrs field, then rounded-up Unicode character count divided by four (minimum one). Oversize items are skipped. `dropped_for_budget` counts shortlist entries that did not fit; `considered` counts positive-score fused candidates.
+- **Projection fan-out:** edge `from` renders against the event payload; edge `to` renders against each item. `$event` always refers to the payload. Node rules can also use `each`. Event timestamp is the fallback for node timestamps and every projected edge. Missing text fields are omitted; missing template or `each` fields are errors. Boost predicates are intentionally restricted to `attrs.FIELD == VALUE`, not a general expression language.
+- **Replay and direct writes:** legacy event stores retain full replay semantics, including removing unlogged upserts. New snapshot-managed datasets support atomic replace/apply/deletions and reject ingest/replay. Snapshot APIs reject databases with event logs, preventing mixed authority. Embeddings survive legacy replay only when final node ID and text match. Failed writes leave prior content/revision intact. See [dataset semantics](datasets.md).
+- **Embeddings:** text changes invalidate cached vectors. Explicit reindex replaces all spaces transactionally after successful generation. A configured model cannot query a store containing another model's vectors; it must reindex. Dense is disabled by `provider: none`, except when the library explicitly supplies a provider. Ollama is supported; the draft's Anthropic provider is not implemented. External embedding services may be nondeterministic; replay itself does not call them.
+- **Reproducibility:** stable ID tie-breaking, sorted graph accumulation, deterministic projections, a pinned query `at`, and preserved vectors make replay results byte-identical in the fixture. `config_hash` identifies engine configuration, including paths. It is not a data snapshot, embedding implementation identity, or a hash of query overrides. No historical replay cutoff exists yet. Consumers must save the query and log boundary alongside the config hash for historical evaluations.
+- **Concurrency:** one Engine serializes operations; each query/raw retrieval and each full eval/grid run pins a SQLite read snapshot. Other handles may publish while readers retain their older consistent view. Snapshot mutations acquire the write lock before checking expected revision. SQLite has a five-second busy timeout; callers must handle conflicts/busy failures. Direct external SQL edits bypass the dataset/revision contract.
+
+## Evaluation available now
+
+JSONL labels contain `query_id`, `query`, and expected IDs or explicit `no_answer`. Eval reports answerable-only ranking metrics plus coverage, abstention, no-answer false positives, precision and annotated stale/cross-workstream rates. Raw retriever/RRF conditions evaluate rankings; Braid evaluates packed output after optional evidence/min-score policy. A disabled dense retriever yields no hits. Metrics and full labels persist in SQLite. See [negative evaluation](negative-evaluation.md).
+
+## Remaining milestones
+
+1. Heimdall is the active integration. Follow its [adapter contract](heimdall-integration.md), isolated generation approach, and held-out task-assignment evaluation. Saga is deferred by user direction.
+2. Config grid search and separate proposal output are now implemented; see [usage](grid-search.md). Assembled-context export and `eval record` for consumer outcomes remain unfinished.
+3. All six [post-grid issues](roadmap.md) have implemented mechanisms and synthetic/contract tests, including embedding reuse/background builds and negative evaluations. Real Heimdall calibration, adapter deployment and scale measurements remain pending. Continue using one permitted dataset per database. Saga's exporter and completed-task ablations wait until its integration resumes.
+4. Nexus scale work: storage backend interface/Postgres, vector index interface/ANN, scheduled projection jobs, and richer consumer metadata filters. These are not implemented or claimed as stubs.
+5. Learned fusion and cross-encoder reranking remain gated on labels and measurable improvement. No fabricated benchmark result is used to select graph damping or seed mode.
+
+The first implementation does not establish that fusion beats dense-only or no context. That remains the empirical question for the consumer harness.

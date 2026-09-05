@@ -1,0 +1,1 @@
+{"text":"ConnectionResetError in consumer loop","anchors":["task:T-112","file:src/queue.py"],"filters":{"types":["report"]},"budget":{"max":100},"at":"2026-09-04T12:00:00Z","explain":true}

@@ -1,0 +1,21 @@
+.tools/
+bin/
+*.db
+*.db-shm
+*.db-wal
+*.test
+coverage.out
+
+# Imported local consumer handoff packet; portable integration docs live in docs/.
+docs/heimdall/
+.env
+.env.*
+!.env.example
+braid.yaml
+*.proposed.yaml
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+/braid
+/braid.exe

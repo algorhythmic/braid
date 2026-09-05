@@ -1,0 +1,4 @@
+{"id":1,"ts":"2026-09-04T10:00:00Z","name":"task.created","payload":{"id":"T-112","title":"Repair queue consumer connection resets"}}
+{"id":2,"ts":"2026-09-04T10:01:00Z","name":"file.observed","payload":{"path":"src/queue.py"}}
+{"id":3,"ts":"2026-09-04T10:02:00Z","name":"worker.reported","payload":{"id":"R-77c","task":"T-112","summary":"Retry queue reads after ConnectionResetError with bounded backoff","failure":"ConnectionResetError in consumer loop","status":"failed","tokens":42,"files":["src/queue.py"]}}
+{"id":4,"ts":"2026-09-04T10:03:00Z","name":"worker.reported","payload":{"id":"R-9a1","task":"T-112","summary":"Connection reset resolved by reconnecting before retry","status":"passed","tokens":24,"files":["src/queue.py"]}}

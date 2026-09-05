@@ -1,0 +1,17 @@
+# Use one private database per permitted scope and published generation.
+# Populate through the Heimdall adapter's upsert snapshot; do not replay this DB.
+version: 1
+dataset_id: heimdall:assignment:example
+store: {backend: sqlite, path: ./heimdall.braid.db}
+embed: {provider: none}
+graph:
+  damping: 0.85
+  seed: uniform
+  max_hops: 3
+  undirected: [parent, member_of, serves, origin, same_content, blocks]
+temporal: {half_life_hours: 72}
+defaults:
+  weights: {lexical: 0.6, dense: 0.8, graph: 1.2, temporal: 1.0}
+  k: {lexical: 60, dense: 60, graph: 60, temporal: 60}
+  mmr_lambda: 0.7
+  budget: {max: 2500}

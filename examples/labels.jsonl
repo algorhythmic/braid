@@ -1,0 +1,1 @@
+{"query_id":"queue-reset","query":{"text":"ConnectionResetError","anchors":["task:T-112"],"filters":{"types":["report"]},"at":"2026-09-04T12:00:00Z"},"expected":["report:R-77c","report:R-9a1"]}
