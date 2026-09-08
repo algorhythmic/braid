@@ -1,5 +1,7 @@
 package braid
 
+import "context"
+
 type evaluationStats struct {
 	m                                                             Metrics
 	total, answered, noAnswerFP, returned, relevant, stale, cross int
@@ -7,6 +9,23 @@ type evaluationStats struct {
 
 func (s *evaluationStats) add(ids []string, l Label) {
 	s.total++
+	forbidden, missing := false, false
+	for _, id := range ids {
+		forbidden = forbidden || contains(l.ForbiddenIDs, id)
+		deps, _ := dependencyClosure(context.Background(), []string{id}, l.Query.Requires)
+		for _, dep := range deps {
+			missing = missing || !contains(ids, dep)
+		}
+	}
+	for _, id := range l.Query.MandatoryIDs {
+		missing = missing || !contains(ids, id)
+	}
+	if forbidden {
+		s.m.ForbiddenHitRate++
+	}
+	if missing {
+		s.m.MissingRequiredRate++
+	}
 	if len(ids) > 0 {
 		s.answered++
 	}
@@ -67,6 +86,9 @@ func (s evaluationStats) metrics() Metrics {
 		m.MRR /= n
 		m.NDCG10 /= n
 	}
+	m.ForbiddenHitRate /= float64(max(1, s.total))
+	m.MissingRequiredRate /= float64(max(1, s.total))
+	m.BudgetOverrunRate /= float64(max(1, m.BudgetCases))
 	m.Coverage = ratio(s.answered, s.total)
 	m.AbstentionRate = ratio(s.total-s.answered, s.total)
 	m.NoAnswerFalsePositiveRate = ratio(s.noAnswerFP, m.NoAnswerQueries)

@@ -45,3 +45,29 @@ func TestCLIGridProposalDoesNotOverwriteConfig(t *testing.T) {
 		t.Fatal("overwrote prior proposal")
 	}
 }
+
+func TestCLIGridDoesNotWriteAnInfeasibleProposal(t *testing.T) {
+	dir := t.TempDir()
+	c := braid.DefaultConfig()
+	c.Store.Path = filepath.Join(dir, "db")
+	config := filepath.Join(dir, "config.yaml")
+	grid := filepath.Join(dir, "grid.yaml")
+	labels := filepath.Join(dir, "labels.jsonl")
+	proposal := filepath.Join(dir, "proposal.yaml")
+	b, _ := yaml.Marshal(c)
+	for path, data := range map[string][]byte{config: b, grid: []byte("mmr_lambda: [1]\nconstraints:\n  max_missing_required_rate: 0\n"), labels: []byte(`{"query_id":"q","query":{"mandatory_ids":["missing"]},"expected":["action"]}`)} {
+		if err := os.WriteFile(path, data, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var out bytes.Buffer
+	if err := run(context.Background(), []string{"eval", "--config", config, "--grid", grid, "--labels", labels, "--proposal", proposal}, bytes.NewReader(nil), &out); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(proposal); !os.IsNotExist(err) {
+		t.Fatal("wrote an infeasible proposal", err)
+	}
+	if !bytes.Contains(out.Bytes(), []byte(`"status":"no_feasible_configuration"`)) {
+		t.Fatal(out.String())
+	}
+}

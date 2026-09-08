@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -12,6 +11,12 @@ import (
 )
 
 func (e *Engine) validateQuery(q Query) error {
+	if _, _, err := filterSQL(q.Filters); err != nil {
+		return err
+	}
+	if q.ExpectedRevision != nil && *q.ExpectedRevision < 0 {
+		return fmt.Errorf("expected_revision must be nonnegative")
+	}
 	if q.MinScore != nil && (!finite(*q.MinScore) || *q.MinScore < 0) {
 		return fmt.Errorf("min_score must be finite and nonnegative")
 	}
@@ -23,7 +28,7 @@ func (e *Engine) validateQuery(q Query) error {
 			return fmt.Errorf("invalid query weight %q", k)
 		}
 	}
-	if q.Budget != nil && (!finite(q.Budget.Max) || q.Budget.Max < 0) {
+	if q.Budget != nil && (!finite(q.Budget.Max) || q.Budget.Max < 0 || !finite(q.Budget.Fixed) || q.Budget.Fixed < 0) {
 		return fmt.Errorf("budget must be finite and nonnegative")
 	}
 	for _, b := range q.Boosts {
@@ -67,13 +72,19 @@ func boostMatches(b Boost, n Node) bool {
 	return ok && fmt.Sprint(v) == want
 }
 
-// Query runs independent retrievers, weighted RRF, an MMR shortlist, and packing.
+// Query runs independent retrievers, weighted RRF, and atomic budgeted MMR selection.
 func (e *Engine) Query(ctx context.Context, q Query) (Result, error) {
-	e.mu.Lock()
+	if err := e.mu.LockContext(ctx); err != nil {
+		return Result{}, err
+	}
 	defer e.mu.Unlock()
-	return e.query(ctx, q)
+	result, err := e.query(ctx, q)
+	return result, contextError(ctx, err)
 }
 func (e *Engine) query(ctx context.Context, q Query) (Result, error) {
+	return e.queryOutput(ctx, q, nil)
+}
+func (e *Engine) queryOutput(ctx context.Context, q Query, output *Output) (Result, error) {
 	if e.read == nil {
 		tx, err := e.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 		if err != nil {
@@ -81,41 +92,54 @@ func (e *Engine) query(ctx context.Context, q Query) (Result, error) {
 		}
 		defer tx.Rollback()
 		view := &Engine{db: e.db, cfg: e.cfg, provider: e.provider, cost: e.cost, read: tx}
-		return view.query(ctx, q)
+		return view.queryOutput(ctx, q, output)
 	}
-	result := Result{Items: []Item{}, ConfigHash: configHash(e.cfg)}
+	result := Result{Items: []Item{}, ConfigHash: configHash(e.cfg), RankingVersion: RankingVersion}
+	e.stages = nil
+	if q.Trace {
+		e.stages = map[string]StageStats{}
+		result.Stages = e.stages
+	}
 	if err := e.validateQuery(q); err != nil {
 		return result, err
 	}
 	if q.At.IsZero() {
 		q.At = time.Now().UTC()
 	}
-	state, err := e.dataset(ctx)
+	state, err := e.readRevision(ctx, q.ExpectedRevision)
 	if err != nil {
 		return result, err
 	}
 	result.Dataset = state
-	nodes, err := e.nodes(ctx)
-	if err != nil {
-		return result, err
-	}
-	byID := map[string]Node{}
-	for _, n := range nodes {
-		byID[n.ID] = n
-	}
-	vs, err := e.vectors(ctx)
-	if err != nil {
-		return result, err
-	}
-	g, err := e.neighborhood(ctx, q, nodes)
-	if err != nil {
-		return result, err
-	}
 	weights := map[string]float64{}
 	for _, r := range retrieverNames {
 		weights[r] = e.cfg.Defaults.Weights[r]
 		if w, ok := q.Weights[r]; ok {
 			weights[r] = w
+		}
+	}
+	var nodes []Node
+	byID := map[string]Node{}
+	vs := map[string][]float32{}
+	var g neighborhood
+	if weights["dense"] > 0 || weights["graph"] > 0 || weights["temporal"] > 0 {
+		nodes, err = e.filteredNodes(ctx, q.Filters)
+		if err != nil {
+			return result, err
+		}
+	}
+	if weights["dense"] > 0 {
+		vs, err = e.vectors(ctx)
+		if err != nil {
+			return result, err
+		}
+	}
+	if len(q.Anchors) > 0 && (weights["graph"] > 0 || (weights["temporal"] > 0 && e.cfg.Temporal.Neighborhood)) {
+		start := time.Now()
+		g, err = e.neighborhood(ctx, q)
+		e.recordTime("graph", start)
+		if err != nil {
+			return result, err
 		}
 	}
 	lists := map[string][]Hit{}
@@ -127,18 +151,38 @@ func (e *Engine) query(ctx context.Context, q Query) (Result, error) {
 		if weights[r] == 0 {
 			continue
 		}
+		start := time.Now()
 		switch r {
 		case "lexical":
 			lists[r], err = e.lexical(ctx, q, e.cfg.CandidateLimit)
 		case "dense":
 			lists[r], err = e.dense(ctx, q, nodes, vs, e.cfg.CandidateLimit)
 		case "graph":
-			lists[r] = e.graph(q, nodes, g, e.cfg.CandidateLimit)
+			lists[r], err = e.graph(ctx, q, nodes, g, e.cfg.CandidateLimit)
 		case "temporal":
-			lists[r] = e.temporal(q, nodes, g, e.cfg.CandidateLimit)
+			lists[r], err = e.temporal(ctx, q, nodes, g, e.cfg.CandidateLimit)
 		}
+		e.recordTime(r+"_retrieve", start)
 		if err != nil {
 			return result, fmt.Errorf("%s: %w", r, err)
+		}
+	}
+	if weights["lexical"] > 0 {
+		result.LexicalStatus = "matched"
+		if len(lists["lexical"]) == 0 {
+			result.LexicalStatus = "no_matches"
+			where, _, _ := filterSQL(q.Filters)
+			if where != "1" {
+				probe := q
+				probe.Filters = Filters{}
+				hits, er := e.lexical(ctx, probe, 1)
+				if er != nil {
+					return result, er
+				}
+				if len(hits) > 0 {
+					result.LexicalStatus = "filtered_out"
+				}
+			}
 		}
 	}
 	fused := map[string]*Hit{}
@@ -157,9 +201,25 @@ func (e *Engine) query(ctx context.Context, q Query) (Result, error) {
 			f.Why = append(f.Why, h.Why...)
 		}
 	}
+	if nodes == nil {
+		ids := []string{}
+		for id := range fused {
+			ids = append(ids, id)
+		}
+		nodes, err = e.filteredNodes(ctx, Filters{AllowedIDs: ids})
+		if err != nil {
+			return result, err
+		}
+	}
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
 	boosts := append(append([]Boost{}, e.cfg.Defaults.Boosts...), q.Boosts...)
 	candidates := []Hit{}
 	for _, n := range nodes {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
 		h, ok := fused[n.ID]
 		if !ok {
 			continue
@@ -197,106 +257,27 @@ func (e *Engine) query(ctx context.Context, q Query) (Result, error) {
 		result.AbstentionReason = "evidence_policy"
 	}
 	candidates = eligibleCandidates
-	// MMR reduces the union to candidate_limit before packing. Merely reordering
-	// every candidate here would be undone by the later value/cost sort.
-	chosen := []Hit{}
-	used := map[string]bool{}
-	maxSim := map[string]float64{}
-	textTerms := map[string]map[string]bool{}
-	for _, h := range candidates {
-		textTerms[h.ID] = redundancyTerms(byID[h.ID].Text)
+	start := time.Now()
+	if err = e.pack(ctx, q, candidates, byID, vs, output, &result); err != nil {
+		return result, err
 	}
-	peak := 1.0
-	if len(candidates) > 0 {
-		peak = candidates[0].Score
-	}
-	for len(chosen) < min(e.cfg.CandidateLimit, len(candidates)) {
-		if err = ctx.Err(); err != nil {
-			return result, err
-		}
-		best := -1
-		bestScore := 0.
-		for i, h := range candidates {
-			if used[h.ID] {
-				continue
-			}
-			// Normalize only for MMR; preserve raw fused scores for reporting and packing.
-			score := e.cfg.Defaults.MMRLambda*(h.Score/peak) - (1-e.cfg.Defaults.MMRLambda)*maxSim[h.ID]
-			if best < 0 || score > bestScore {
-				best = i
-				bestScore = score
-			}
-		}
-		h := candidates[best]
-		used[h.ID] = true
-		chosen = append(chosen, h)
-		for _, other := range candidates {
-			if used[other.ID] {
-				continue
-			}
-			sim := 0.
-			a, aok := vs[h.ID]
-			b, bok := vs[other.ID]
-			if aok && bok {
-				sim = cosine(a, b)
-			} else {
-				sim = termOverlap(textTerms[h.ID], textTerms[other.ID])
-			}
-			if sim > maxSim[other.ID] {
-				maxSim[other.ID] = sim
-			}
-		}
-	}
-	costs := map[string]float64{}
-	order := map[string]int{}
-	for i, h := range chosen {
-		c, er := e.nodeCost(byID[h.ID])
-		if er != nil {
-			return result, er
-		}
-		if !finite(c) || c < 0 {
-			return result, fmt.Errorf("invalid cost for %s", h.ID)
-		}
-		costs[h.ID] = c
-		order[h.ID] = i
-	}
-	sort.SliceStable(chosen, func(i, j int) bool {
-		a, b := chosen[i], chosen[j]
-		ca, cb := costs[a.ID], costs[b.ID]
-		if ca == 0 || cb == 0 {
-			if ca == cb {
-				return order[a.ID] < order[b.ID]
-			}
-			return ca == 0
-		}
-		ra, rb := a.Score/ca, b.Score/cb
-		if ra == rb {
-			return order[a.ID] < order[b.ID]
-		}
-		return ra > rb
-	})
-	budget := e.cfg.Defaults.Budget.Max
-	if q.Budget != nil {
-		budget = q.Budget.Max
-	}
-	for _, h := range chosen {
-		c := costs[h.ID]
-		if c > budget-result.TotalCost {
-			result.DroppedForBudget++
-			continue
-		}
-		result.Items = append(result.Items, Item{Node: byID[h.ID], CostValue: c, Score: h.Score, Why: h.Why})
-		result.TotalCost += c
-	}
+	e.recordTime("selection", start)
+
 	result.Abstained = len(result.Items) == 0
+	if !result.Abstained {
+		result.AbstentionReason = ""
+	}
 	if result.Abstained && result.AbstentionReason == "" {
 		if len(candidates) == 0 {
 			result.AbstentionReason = "no_candidates"
+			if result.LexicalStatus == "filtered_out" {
+				result.AbstentionReason = "eligibility"
+			}
 		} else {
 			result.AbstentionReason = "budget"
 		}
 	}
-	return result, nil
+	return result, ctx.Err()
 }
 
 // Missing vectors fall back to lexical evidence, never domain type labels.
@@ -335,9 +316,12 @@ func (e *Engine) Retriever(name string) (Retriever, error) {
 }
 func (r engineRetriever) Retrieve(ctx context.Context, q Query, limit int) ([]Hit, error) {
 	e := r.e
-	e.mu.Lock()
+	if err := e.mu.LockContext(ctx); err != nil {
+		return nil, err
+	}
 	defer e.mu.Unlock()
-	return r.retrieve(ctx, q, limit)
+	hits, err := r.retrieve(ctx, q, limit)
+	return hits, contextError(ctx, err)
 }
 func (r engineRetriever) retrieve(ctx context.Context, q Query, limit int) ([]Hit, error) {
 	e := r.e
@@ -350,11 +334,14 @@ func (r engineRetriever) retrieve(ctx context.Context, q Query, limit int) ([]Hi
 		view := &Engine{db: e.db, cfg: e.cfg, provider: e.provider, cost: e.cost, read: tx}
 		return (engineRetriever{e: view, name: r.name}).retrieve(ctx, q, limit)
 	}
-	if limit <= 0 {
-		return []Hit{}, nil
-	}
 	if err := e.validateQuery(q); err != nil {
 		return nil, err
+	}
+	if _, err := e.readRevision(ctx, q.ExpectedRevision); err != nil {
+		return nil, err
+	}
+	if limit <= 0 {
+		return []Hit{}, nil
 	}
 	if q.At.IsZero() {
 		q.At = time.Now().UTC()
@@ -362,7 +349,7 @@ func (r engineRetriever) retrieve(ctx context.Context, q Query, limit int) ([]Hi
 	if r.name == "lexical" {
 		return e.lexical(ctx, q, limit)
 	}
-	nodes, err := e.nodes(ctx)
+	nodes, err := e.filteredNodes(ctx, q.Filters)
 	if err != nil {
 		return nil, err
 	}
@@ -373,12 +360,15 @@ func (r engineRetriever) retrieve(ctx context.Context, q Query, limit int) ([]Hi
 		}
 		return e.dense(ctx, q, nodes, vs, limit)
 	}
-	g, err := e.neighborhood(ctx, q, nodes)
+	var g neighborhood
+	if len(q.Anchors) > 0 && (r.name == "graph" || e.cfg.Temporal.Neighborhood) {
+		g, err = e.neighborhood(ctx, q)
+	}
 	if err != nil {
 		return nil, err
 	}
 	if r.name == "graph" {
-		return e.graph(q, nodes, g, limit), nil
+		return e.graph(ctx, q, nodes, g, limit)
 	}
-	return e.temporal(q, nodes, g, limit), nil
+	return e.temporal(ctx, q, nodes, g, limit)
 }

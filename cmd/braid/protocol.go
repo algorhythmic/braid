@@ -10,6 +10,7 @@ import (
 	"io"
 	"reflect"
 	"strings"
+	"time"
 
 	"github.com/algorhythmic/braid/pkg/braid"
 )
@@ -17,21 +18,24 @@ import (
 const protocolVersion = 1
 const maxRequestBytes = 16 << 20
 
-var capabilities = []string{"query", "explain", "upsert", "ingest", "replay", "reindex", "eval", "strict_requests", "structured_errors", "dataset_binding", "replace_snapshot", "apply", "dataset", "reindex_start", "reindex_status", "reindex_cancel", "embedding_reuse", "negative_eval", "abstention_policy"}
+var capabilities = []string{"query", "explain", "upsert", "ingest", "replay", "reindex", "eval", "strict_requests", "structured_errors", "dataset_binding", "replace_snapshot", "apply", "dataset", "reindex_start", "reindex_status", "reindex_cancel", "embedding_reuse", "negative_eval", "abstention_policy", "hard_filters", "allowed_ids", "get_many", "read_revision", "required_context", "context_export", "query_timeout", "stage_stats", "constrained_eval"}
 
 type request struct {
-	Force                bool            `json:"force"`
-	JobID                string          `json:"job_id"`
-	Snapshot             braid.Snapshot  `json:"snapshot"`
-	Update               braid.Update    `json:"update"`
-	ID                   json.RawMessage `json:"id"`
-	Method               string          `json:"method"`
-	Versions             []int           `json:"versions"`
-	RequiredCapabilities []string        `json:"required_capabilities"`
-	Query                braid.Query     `json:"query"`
-	Events               []braid.Event   `json:"events"`
-	Batch                braid.Batch     `json:"batch"`
-	Labels               []braid.Label   `json:"labels"`
+	TimeoutMS            *int64              `json:"timeout_ms"`
+	Get                  braid.GetRequest    `json:"get"`
+	Export               braid.ExportRequest `json:"export"`
+	Force                bool                `json:"force"`
+	JobID                string              `json:"job_id"`
+	Snapshot             braid.Snapshot      `json:"snapshot"`
+	Update               braid.Update        `json:"update"`
+	ID                   json.RawMessage     `json:"id"`
+	Method               string              `json:"method"`
+	Versions             []int               `json:"versions"`
+	RequiredCapabilities []string            `json:"required_capabilities"`
+	Query                braid.Query         `json:"query"`
+	Events               []braid.Event       `json:"events"`
+	Batch                braid.Batch         `json:"batch"`
+	Labels               []braid.Label       `json:"labels"`
 }
 type protocolError struct {
 	Code    string `json:"code"`
@@ -201,6 +205,13 @@ func validateRequest(b []byte) (request, *protocolError) {
 		required = "versions"
 	case "query", "explain":
 		required = "query"
+		allowed["timeout_ms"] = true
+	case "get_many":
+		required = "get"
+		allowed["timeout_ms"] = true
+	case "export_context":
+		required = "export"
+		allowed["timeout_ms"] = true
 	case "ingest":
 		required = "events"
 	case "upsert":
@@ -234,6 +245,9 @@ func validateRequest(b []byte) (request, *protocolError) {
 		if !ok || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 			return r, &protocolError{Code: "invalid_request", Message: required + " is required and must not be null"}
 		}
+	}
+	if r.TimeoutMS != nil && (*r.TimeoutMS <= 0 || *r.TimeoutMS > 86400000) {
+		return r, &protocolError{Code: "invalid_request", Message: "timeout_ms must be between 1 and 86400000"}
 	}
 	if r.Method == "hello" && len(r.Versions) == 0 {
 		return r, &protocolError{Code: "invalid_request", Message: "versions must not be empty"}
@@ -274,10 +288,15 @@ func handleRequest(ctx context.Context, e *braid.Engine, b []byte, ready *bool, 
 			return fail(r.ID, "operation_failed", err.Error())
 		}
 		*ready = true
-		return response{Version: protocolVersion, ID: r.ID, Result: map[string]any{"protocol_version": protocolVersion, "capabilities": capabilities, "max_request_bytes": maxRequestBytes, "ranking_version": "mmr-normalized-jaccard-v1", "dataset": state}}
+		return response{Version: protocolVersion, ID: r.ID, Result: map[string]any{"protocol_version": protocolVersion, "capabilities": capabilities, "max_request_bytes": maxRequestBytes, "ranking_version": braid.RankingVersion, "dataset": state}}
 	}
 	if !*ready {
 		return fail(r.ID, "negotiation_required", "send hello with supported versions before other methods")
+	}
+	if r.TimeoutMS != nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(*r.TimeoutMS)*time.Millisecond)
+		defer cancel()
 	}
 	resp := response{Version: protocolVersion, ID: r.ID}
 	var err error
@@ -287,6 +306,10 @@ func handleRequest(ctx context.Context, e *braid.Engine, b []byte, ready *bool, 
 			r.Query.Explain = true
 		}
 		resp.Result, err = e.Query(ctx, r.Query)
+	case "get_many":
+		resp.Result, err = e.GetMany(ctx, r.Get)
+	case "export_context":
+		resp.Result, err = e.Export(ctx, r.Export)
 	case "ingest":
 		err = e.Ingest(ctx, r.Events)
 		resp.Result = map[string]bool{"ok": true}

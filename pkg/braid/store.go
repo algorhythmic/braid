@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"sync"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -19,8 +18,9 @@ type Engine struct {
 	cfg      Config
 	provider Provider
 	cost     CostFunc
-	mu       sync.Mutex
+	mu       contextMutex
 	read     *sql.Tx
+	stages   map[string]StageStats
 }
 type Option func(*Engine)
 
@@ -171,7 +171,15 @@ func (e *Engine) Upsert(ctx context.Context, b Batch) error {
 	return tx.Commit()
 }
 func (e *Engine) nodes(ctx context.Context) ([]Node, error) {
-	rows, err := e.reader().QueryContext(ctx, `SELECT id,type,text,ts,cost,attrs FROM nodes ORDER BY id`)
+	return e.filteredNodes(ctx, Filters{})
+}
+func (e *Engine) filteredNodes(ctx context.Context, f Filters) ([]Node, error) {
+	start := time.Now()
+	where, args, err := filterSQL(f)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := e.reader().QueryContext(ctx, `SELECT n.id,n.type,n.text,n.ts,n.cost,n.attrs FROM nodes n WHERE `+where+` ORDER BY n.id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -190,12 +198,18 @@ func (e *Engine) nodes(ctx context.Context) ([]Node, error) {
 		if err = json.Unmarshal([]byte(attrs), &n.Attrs); err != nil {
 			return nil, err
 		}
+		e.recordRead("nodes", len(n.ID)+len(n.Type)+len(n.Text)+len(ts)+len(attrs))
 		out = append(out, n)
 	}
+	e.recordTime("nodes", start)
 	return out, rows.Err()
 }
 func (e *Engine) vectors(ctx context.Context) (map[string][]float32, error) {
-	if e.cfg.Embed.Model == "" {
+	return e.vectorIDs(ctx, nil)
+}
+func (e *Engine) vectorIDs(ctx context.Context, ids []string) (map[string][]float32, error) {
+	start := time.Now()
+	if e.cfg.Embed.Model == "" || (ids != nil && len(ids) == 0) {
 		return map[string][]float32{}, nil
 	}
 	var foreign int
@@ -205,7 +219,14 @@ func (e *Engine) vectors(ctx context.Context) (map[string][]float32, error) {
 	if foreign > 0 {
 		return nil, fmt.Errorf("stored embeddings use another model; reindex required before querying model %s", e.cfg.Embed.Model)
 	}
-	rows, err := e.reader().QueryContext(ctx, `SELECT node_id,dim,vec FROM embeddings WHERE model=? ORDER BY node_id`, e.cfg.Embed.Model)
+	query := `SELECT node_id,dim,vec FROM embeddings WHERE model=?`
+	args := []any{e.cfg.Embed.Model}
+	if ids != nil {
+		b, _ := json.Marshal(ids)
+		query += ` AND node_id IN (SELECT value FROM json_each(?))`
+		args = append(args, string(b))
+	}
+	rows, err := e.reader().QueryContext(ctx, query+` ORDER BY node_id`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -227,7 +248,9 @@ func (e *Engine) vectors(ctx context.Context) (map[string][]float32, error) {
 		for i := range v {
 			v[i] = math.Float32frombits(binary.LittleEndian.Uint32(b[i*4:]))
 		}
+		e.recordRead("vectors", len(id)+len(b))
 		out[id] = v
 	}
+	e.recordTime("vectors", start)
 	return out, rows.Err()
 }

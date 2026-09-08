@@ -38,7 +38,10 @@ type Event struct {
 	Payload map[string]any `json:"payload"`
 }
 type Budget struct {
-	Max float64 `json:"max" yaml:"max"`
+	Max       float64 `json:"max" yaml:"max"`
+	Fixed     float64 `json:"fixed,omitempty" yaml:"fixed,omitempty"`
+	Unit      string  `json:"unit,omitempty" yaml:"unit,omitempty"`
+	Estimator string  `json:"estimator,omitempty" yaml:"estimator,omitempty"`
 }
 type Boost struct {
 	Type   string  `json:"type" yaml:"type"`
@@ -49,18 +52,26 @@ type Filters struct {
 	Types      []string  `json:"types,omitempty"`
 	Since      time.Time `json:"since,omitempty"`
 	ExcludeIDs []string  `json:"exclude_ids,omitempty"`
+	// nil is unconstrained; a non-nil empty slice permits no IDs.
+	AllowedIDs []string   `json:"allowed_ids"`
+	Predicate  *Predicate `json:"predicate,omitempty"`
 }
 type Query struct {
-	MinScore        *float64           `json:"min_score,omitempty"`
-	RequireEvidence bool               `json:"require_evidence,omitempty"`
-	DatasetID       string             `json:"dataset_id,omitempty"`
-	Anchors         []string           `json:"anchors,omitempty"`
-	Text            string             `json:"text,omitempty"`
-	Weights         map[string]float64 `json:"weights,omitempty"`
-	Filters         Filters            `json:"filters,omitempty"`
-	Boosts          []Boost            `json:"boosts,omitempty"`
-	Budget          *Budget            `json:"budget,omitempty"`
-	Explain         bool               `json:"explain,omitempty"`
+	ExpectedRevision *int64 `json:"expected_revision,omitempty"`
+	// Requires maps an item to IDs that must accompany it, transitively.
+	Requires        map[string][]string `json:"requires,omitempty"`
+	MandatoryIDs    []string            `json:"mandatory_ids,omitempty"`
+	Trace           bool                `json:"trace,omitempty"`
+	MinScore        *float64            `json:"min_score,omitempty"`
+	RequireEvidence bool                `json:"require_evidence,omitempty"`
+	DatasetID       string              `json:"dataset_id,omitempty"`
+	Anchors         []string            `json:"anchors,omitempty"`
+	Text            string              `json:"text,omitempty"`
+	Weights         map[string]float64  `json:"weights,omitempty"`
+	Filters         Filters             `json:"filters,omitempty"`
+	Boosts          []Boost             `json:"boosts,omitempty"`
+	Budget          *Budget             `json:"budget,omitempty"`
+	Explain         bool                `json:"explain,omitempty"`
 	// At pins the recency clock for reproducible replay and evaluation.
 	At time.Time `json:"at,omitempty"`
 }
@@ -77,16 +88,21 @@ type Item struct {
 	Why       []string `json:"why"`
 }
 type Result struct {
-	Abstained        bool             `json:"abstained"`
-	AbstentionReason string           `json:"abstention_reason,omitempty"`
-	Dataset          DatasetState     `json:"dataset"`
-	Items            []Item           `json:"items"`
-	TotalCost        float64          `json:"total_cost"`
-	Considered       int              `json:"considered"`
-	DroppedForBudget int              `json:"dropped_for_budget"`
-	ConfigHash       string           `json:"config_hash"`
-	Ranks            map[string][]Hit `json:"ranks,omitempty"`
-	FusedOrder       []Hit            `json:"fused_order,omitempty"`
+	LexicalStatus    string                `json:"lexical_status,omitempty"`
+	RankingVersion   string                `json:"ranking_version"`
+	Accounting       CostAccounting        `json:"accounting"`
+	Rejections       []Rejection           `json:"rejections,omitempty"`
+	Stages           map[string]StageStats `json:"stages,omitempty"`
+	Abstained        bool                  `json:"abstained"`
+	AbstentionReason string                `json:"abstention_reason,omitempty"`
+	Dataset          DatasetState          `json:"dataset"`
+	Items            []Item                `json:"items"`
+	TotalCost        float64               `json:"total_cost"`
+	Considered       int                   `json:"considered"`
+	DroppedForBudget int                   `json:"dropped_for_budget"`
+	ConfigHash       string                `json:"config_hash"`
+	Ranks            map[string][]Hit      `json:"ranks,omitempty"`
+	FusedOrder       []Hit                 `json:"fused_order,omitempty"`
 }
 type Retriever interface {
 	Retrieve(context.Context, Query, int) ([]Hit, error)

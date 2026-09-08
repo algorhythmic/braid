@@ -16,25 +16,30 @@ import (
 
 // Grid contains Cartesian axes; omitted axes retain the base configuration.
 type Grid struct {
-	Weights   map[string][]float64 `yaml:"weights" json:"weights,omitempty"`
-	K         map[string][]float64 `yaml:"k" json:"k,omitempty"`
-	MMRLambda []float64            `yaml:"mmr_lambda" json:"mmr_lambda,omitempty"`
-	Damping   []float64            `yaml:"graph.damping" json:"graph.damping,omitempty"`
-	Seed      []string             `yaml:"graph.seed" json:"graph.seed,omitempty"`
+	Constraints *EvalConstraints     `yaml:"constraints" json:"constraints,omitempty"`
+	Weights     map[string][]float64 `yaml:"weights" json:"weights,omitempty"`
+	K           map[string][]float64 `yaml:"k" json:"k,omitempty"`
+	MMRLambda   []float64            `yaml:"mmr_lambda" json:"mmr_lambda,omitempty"`
+	Damping     []float64            `yaml:"graph.damping" json:"graph.damping,omitempty"`
+	Seed        []string             `yaml:"graph.seed" json:"graph.seed,omitempty"`
 }
 type GridTrial struct {
+	Eligible   bool     `json:"eligible"`
+	Violations []string `json:"violations,omitempty"`
 	Evaluation
 	Config Config `json:"config"`
 }
 type GridReport struct {
-	Dataset       DatasetState `json:"dataset"`
-	At            time.Time    `json:"at"`
-	LabelsHash    string       `json:"labels_hash"`
-	Objective     string       `json:"objective"`
-	Baselines     []Evaluation `json:"baselines"`
-	Trials        []GridTrial  `json:"trials"`
-	BestCondition string       `json:"best_condition"`
-	Proposal      Config       `json:"proposal"`
+	Constraints   *EvalConstraints `json:"constraints,omitempty"`
+	Status        string           `json:"status"`
+	Dataset       DatasetState     `json:"dataset"`
+	At            time.Time        `json:"at"`
+	LabelsHash    string           `json:"labels_hash"`
+	Objective     string           `json:"objective"`
+	Baselines     []Evaluation     `json:"baselines"`
+	Trials        []GridTrial      `json:"trials"`
+	BestCondition string           `json:"best_condition"`
+	Proposal      Config           `json:"proposal"`
 }
 
 func LoadGrid(path string) (Grid, error) {
@@ -61,6 +66,11 @@ func cloneConfig(c Config) Config {
 	return out
 }
 func (g Grid) configurations(base Config) ([]Config, error) {
+	if g.Constraints != nil {
+		if err := g.Constraints.validate(); err != nil {
+			return nil, err
+		}
+	}
 	configs := []Config{cloneConfig(base)}
 	axes := 0
 	expand := func(n int, apply func(*Config, int)) error {
@@ -145,7 +155,7 @@ func metricValue(m Metrics, objective string) (float64, error) {
 func (e *Engine) GridSearch(ctx context.Context, labels []Label, g Grid, objective string) (GridReport, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	report := GridReport{At: time.Now().UTC(), Objective: objective}
+	report := GridReport{Constraints: g.Constraints, Status: "no_feasible_configuration", At: time.Now().UTC(), Objective: objective}
 	if _, err := metricValue(Metrics{}, objective); err != nil {
 		return report, err
 	}
@@ -206,12 +216,12 @@ func (e *Engine) GridSearch(ctx context.Context, labels []Label, g Grid, objecti
 			return report, err
 		}
 		condition := &Engine{db: e.db, cfg: c, provider: provider, cost: e.cost, read: tx}
-		run := Evaluation{Condition: fmt.Sprintf("grid/%04d", i+1), Queries: len(pinned), ConfigHash: configHash(c), Dataset: report.Dataset}
+		run := Evaluation{RankingVersion: RankingVersion, Condition: fmt.Sprintf("grid/%04d", i+1), Queries: len(pinned), ConfigHash: configHash(c), Dataset: report.Dataset}
 		stats := evaluationStats{}
 		for _, l := range pinned {
 			q := l.Query
 			q.Explain = false
-			res, er := condition.query(ctx, q)
+			res, er := condition.queryOutput(ctx, q, l.Output)
 			if er != nil {
 				return report, fmt.Errorf("%s query %s: %w", run.Condition, l.QueryID, er)
 			}
@@ -220,12 +230,17 @@ func (e *Engine) GridSearch(ctx context.Context, labels []Label, g Grid, objecti
 				ids = append(ids, it.ID)
 			}
 			stats.add(ids, l)
+			stats.addBudget(res, l, c.Defaults.Budget)
+			l.Query = q
+			run.Outcomes = append(run.Outcomes, outcome(l, res))
 		}
 		run.Metrics = stats.metrics()
-		report.Trials = append(report.Trials, GridTrial{Evaluation: run, Config: c})
+		violations := g.Constraints.violations(run.Metrics)
+		report.Trials = append(report.Trials, GridTrial{Evaluation: run, Config: c, Eligible: len(violations) == 0, Violations: violations})
 		runs = append(runs, run)
 		score, _ := metricValue(run.Metrics, objective)
-		if score > best {
+		if len(violations) == 0 && score > best {
+			report.Status = "ok"
 			best = score
 			report.BestCondition = run.Condition
 			report.Proposal = cloneConfig(c)

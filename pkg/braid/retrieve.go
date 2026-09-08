@@ -9,9 +9,6 @@ import (
 	"unicode"
 )
 
-func eligible(n Node, q Query) bool {
-	return (len(q.Filters.Types) == 0 || contains(q.Filters.Types, n.Type)) && (q.Filters.Since.IsZero() || !n.TS.Before(q.Filters.Since)) && !contains(q.Filters.ExcludeIDs, n.ID)
-}
 func rank(h []Hit, limit int) []Hit {
 	sort.Slice(h, func(i, j int) bool {
 		if h[i].Score == h[j].Score {
@@ -39,22 +36,12 @@ func (e *Engine) lexical(ctx context.Context, q Query, limit int) ([]Hit, error)
 	}
 	s := `SELECT n.id,-bm25(nodes_fts),highlight(nodes_fts,0,'[',']') FROM nodes_fts JOIN nodes n ON n.rowid=nodes_fts.rowid WHERE nodes_fts MATCH ?`
 	args := []any{strings.Join(quoted, " OR ")}
-	if len(q.Filters.Types) > 0 {
-		s += ` AND n.type IN (` + strings.TrimRight(strings.Repeat("?,", len(q.Filters.Types)), ",") + ")"
-		for _, t := range q.Filters.Types {
-			args = append(args, t)
-		}
+	where, filterArgs, err := filterSQL(q.Filters)
+	if err != nil {
+		return nil, err
 	}
-	if !q.Filters.Since.IsZero() {
-		s += ` AND n.ts>=?`
-		args = append(args, timestamp(q.Filters.Since))
-	}
-	if len(q.Filters.ExcludeIDs) > 0 {
-		s += ` AND n.id NOT IN (` + strings.TrimRight(strings.Repeat("?,", len(q.Filters.ExcludeIDs)), ",") + ")"
-		for _, id := range q.Filters.ExcludeIDs {
-			args = append(args, id)
-		}
-	}
+	s += " AND " + where
+	args = append(args, filterArgs...)
 	s += ` ORDER BY bm25(nodes_fts),n.id LIMIT ?`
 	args = append(args, limit)
 	rows, err := e.reader().QueryContext(ctx, s, args...)
@@ -122,8 +109,8 @@ func (e *Engine) dense(ctx context.Context, q Query, nodes []Node, vs map[string
 	}
 	out := []Hit{}
 	for _, n := range nodes {
-		if !eligible(n, q) {
-			continue
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		a, ok := vs[n.ID]
 		if !ok {
@@ -152,11 +139,27 @@ type neighborhood struct {
 	paths map[string][]string
 }
 
-func (e *Engine) neighborhood(ctx context.Context, q Query, nodes []Node) (neighborhood, error) {
+func (e *Engine) neighborhood(ctx context.Context, q Query) (neighborhood, error) {
 	g := neighborhood{adj: map[string][]neighbor{}, dist: map[string]int{}, paths: map[string][]string{}}
 	exists := map[string]bool{}
-	for _, n := range nodes {
-		exists[n.ID] = true
+	// Eligibility constrains outputs, not traversal intermediates.
+	idRows, err := e.reader().QueryContext(ctx, `SELECT id FROM nodes ORDER BY id`)
+	if err != nil {
+		return g, err
+	}
+	for idRows.Next() {
+		var id string
+		if err = idRows.Scan(&id); err != nil {
+			idRows.Close()
+			return g, err
+		}
+		exists[id] = true
+		e.recordRead("graph_ids", len(id))
+	}
+	err = idRows.Err()
+	idRows.Close()
+	if err != nil {
+		return g, err
 	}
 	rows, err := e.reader().QueryContext(ctx, `SELECT src,dst,type,weight FROM edges ORDER BY src,dst,type`)
 	if err != nil {
@@ -169,6 +172,7 @@ func (e *Engine) neighborhood(ctx context.Context, q Query, nodes []Node) (neigh
 			rows.Close()
 			return g, err
 		}
+		e.recordRead("graph", len(src)+len(dst)+len(typ)+8)
 		if w <= 0 || !exists[src] || !exists[dst] {
 			continue
 		}
@@ -199,6 +203,9 @@ func (e *Engine) neighborhood(ctx context.Context, q Query, nodes []Node) (neigh
 		g.ids = append(g.ids, id)
 	}
 	for head := 0; head < len(g.ids); head++ {
+		if err := ctx.Err(); err != nil {
+			return g, err
+		}
 		id := g.ids[head]
 		if g.dist[id] >= e.cfg.Graph.MaxHops {
 			continue
@@ -215,9 +222,9 @@ func (e *Engine) neighborhood(ctx context.Context, q Query, nodes []Node) (neigh
 	sort.Strings(g.ids)
 	return g, nil
 }
-func (e *Engine) graph(q Query, nodes []Node, g neighborhood, limit int) []Hit {
+func (e *Engine) graph(ctx context.Context, q Query, nodes []Node, g neighborhood, limit int) ([]Hit, error) {
 	if len(g.ids) == 0 {
-		return []Hit{}
+		return []Hit{}, nil
 	}
 	seed := map[string]float64{}
 	sum := 0.
@@ -245,12 +252,18 @@ func (e *Engine) graph(q Query, nodes []Node, g neighborhood, limit int) []Hit {
 	}
 	d := e.cfg.Graph.Damping
 	for iter := 0; iter < 20; iter++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		next := map[string]float64{}
 		dangling := 0.
 		for _, id := range g.ids {
 			next[id] = (1 - d) * seed[id]
 		}
 		for _, id := range g.ids {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
 			total := 0.
 			for _, n := range g.adj[id] {
 				if _, ok := g.dist[n.id]; ok {
@@ -274,18 +287,18 @@ func (e *Engine) graph(q Query, nodes []Node, g neighborhood, limit int) []Hit {
 	}
 	out := []Hit{}
 	for _, n := range nodes {
-		if !eligible(n, q) || mass[n.ID] <= 0 {
+		if mass[n.ID] <= 0 {
 			continue
 		}
 		out = append(out, Hit{ID: n.ID, Score: mass[n.ID], Why: []string{fmt.Sprintf("graph: %d hops via %s (mass %.6f)", g.dist[n.ID], strings.Join(g.paths[n.ID], " -> "), mass[n.ID])}})
 	}
-	return rank(out, limit)
+	return rank(out, limit), ctx.Err()
 }
-func (e *Engine) temporal(q Query, nodes []Node, g neighborhood, limit int) []Hit {
+func (e *Engine) temporal(ctx context.Context, q Query, nodes []Node, g neighborhood, limit int) ([]Hit, error) {
 	out := []Hit{}
 	for _, n := range nodes {
-		if !eligible(n, q) {
-			continue
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		if e.cfg.Temporal.Neighborhood && len(q.Anchors) > 0 {
 			if _, ok := g.dist[n.ID]; !ok {
@@ -296,5 +309,5 @@ func (e *Engine) temporal(q Query, nodes []Node, g neighborhood, limit int) []Hi
 		score := math.Exp(-math.Ln2 * age / e.cfg.Temporal.HalfLifeHours)
 		out = append(out, Hit{ID: n.ID, Score: score, Why: []string{fmt.Sprintf("temporal: age %.3f hours (half-life %.3f hours, score %.6f)", age, e.cfg.Temporal.HalfLifeHours, score)}})
 	}
-	return rank(out, limit)
+	return rank(out, limit), ctx.Err()
 }

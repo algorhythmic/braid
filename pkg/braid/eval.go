@@ -9,6 +9,8 @@ import (
 )
 
 type Label struct {
+	ForbiddenIDs       []string `json:"forbidden_ids,omitempty"`
+	Output             *Output  `json:"output,omitempty"`
 	NoAnswer           bool     `json:"no_answer,omitempty"`
 	StaleIDs           []string `json:"stale_ids,omitempty"`
 	CrossWorkstreamIDs []string `json:"cross_workstream_ids,omitempty"`
@@ -17,6 +19,10 @@ type Label struct {
 	Expected           []string `json:"expected"`
 }
 type Metrics struct {
+	ForbiddenHitRate          float64 `json:"forbidden_hit_rate"`
+	MissingRequiredRate       float64 `json:"missing_required_rate"`
+	BudgetOverrunRate         float64 `json:"budget_overrun_rate"`
+	BudgetCases               int     `json:"budget_cases"`
 	AnswerableQueries         int     `json:"answerable_queries"`
 	NoAnswerQueries           int     `json:"no_answer_queries"`
 	Coverage                  float64 `json:"coverage"`
@@ -33,11 +39,13 @@ type Metrics struct {
 	NDCG10                    float64 `json:"ndcg_at_10"`
 }
 type Evaluation struct {
-	Dataset    DatasetState `json:"dataset"`
-	Condition  string       `json:"condition"`
-	Queries    int          `json:"queries"`
-	Metrics    Metrics      `json:"metrics"`
-	ConfigHash string       `json:"config_hash"`
+	RankingVersion string              `json:"ranking_version"`
+	Outcomes       []EvaluationOutcome `json:"outcomes,omitempty"`
+	Dataset        DatasetState        `json:"dataset"`
+	Condition      string              `json:"condition"`
+	Queries        int                 `json:"queries"`
+	Metrics        Metrics             `json:"metrics"`
+	ConfigHash     string              `json:"config_hash"`
 }
 
 func measure(ids, expected []string) Metrics {
@@ -114,7 +122,7 @@ func (e *Engine) evaluate(ctx context.Context, labels []Label, at time.Time) ([]
 			return nil, fmt.Errorf("labels require unique query_id and expected IDs or explicit no_answer")
 		}
 		for _, id := range l.Expected {
-			if id == "" || contains(l.StaleIDs, id) || contains(l.CrossWorkstreamIDs, id) {
+			if id == "" || contains(l.StaleIDs, id) || contains(l.CrossWorkstreamIDs, id) || contains(l.ForbiddenIDs, id) {
 				return nil, fmt.Errorf("label %s has empty or contradictory expected IDs", l.QueryID)
 			}
 		}
@@ -130,7 +138,7 @@ func (e *Engine) evaluate(ctx context.Context, labels []Label, at time.Time) ([]
 		if name != "braid" {
 			condition.cfg.Defaults.Boosts = nil
 		}
-		run := Evaluation{Condition: name, Queries: len(labels), ConfigHash: configHash(condition.cfg), Dataset: state}
+		run := Evaluation{RankingVersion: RankingVersion, Condition: name, Queries: len(labels), ConfigHash: configHash(condition.cfg), Dataset: state}
 		stats := evaluationStats{}
 		for _, l := range labels {
 			q := l.Query
@@ -155,11 +163,19 @@ func (e *Engine) evaluate(ctx context.Context, labels []Label, at time.Time) ([]
 				if name != "braid" {
 					q.Boosts = nil
 				}
-				res, err := condition.query(ctx, q)
+				if l.Output != nil {
+					if err := l.Output.validate(); err != nil {
+						return nil, err
+					}
+				}
+				res, err := condition.queryOutput(ctx, q, l.Output)
 				if err != nil {
 					return nil, err
 				}
 				if name == "braid" {
+					stats.addBudget(res, l, condition.cfg.Defaults.Budget)
+					l.Query = q
+					run.Outcomes = append(run.Outcomes, outcome(l, res))
 					for _, it := range res.Items {
 						ids = append(ids, it.ID)
 					}

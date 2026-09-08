@@ -127,7 +127,7 @@ func (c Config) Validate() error {
 	if !finite(c.Defaults.MMRLambda) || c.Defaults.MMRLambda < 0 || c.Defaults.MMRLambda > 1 {
 		return fmt.Errorf("mmr_lambda must be in [0,1]")
 	}
-	if !finite(c.Defaults.Budget.Max) || c.Defaults.Budget.Max < 0 || c.CandidateLimit <= 0 {
+	if !finite(c.Defaults.Budget.Max) || c.Defaults.Budget.Max < 0 || !finite(c.Defaults.Budget.Fixed) || c.Defaults.Budget.Fixed < 0 || c.CandidateLimit <= 0 {
 		return fmt.Errorf("invalid budget or candidate_limit")
 	}
 	for _, m := range []map[string]float64{c.Defaults.Weights, c.Defaults.K} {

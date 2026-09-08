@@ -213,6 +213,9 @@ func run(ctx context.Context, args []string, in io.Reader, out io.Writer) error 
 			if err != nil {
 				return err
 			}
+			if report.BestCondition == "" {
+				return enc.Encode(report)
+			}
 			b, err := yaml.Marshal(report.Proposal)
 			if err != nil {
 				return err
