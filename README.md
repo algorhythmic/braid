@@ -31,7 +31,7 @@ go run ./cmd/braid eval --config examples/saga.yaml --labels examples/labels.jso
 
 The Saga-named fixture is synthetic: four events and one label exercise ingestion, retrieval, replay and evaluation. It is not a Saga integration or a quality benchmark. Its pinned query time produces identical results after replay.
 
-On Windows, build with `go build -o bin/braid.exe ./cmd/braid`. The optional `scripts/dev.ps1` wrapper uses `.tools/go` when present, otherwise Go from PATH. It does not install Go.
+Development and deployment target Linux/Omarchy. The optional `scripts/dev.sh` wrapper uses `.tools/go/bin/go` when present, otherwise Go from PATH. It runs from the repository root, forwards all Go arguments, preserves explicit `GOPATH`/`GOCACHE` settings, and does not install Go.
 
 ## Heimdall integration
 
@@ -119,14 +119,15 @@ See [grid search](docs/grid-search.md) and [negative evaluation](docs/negative-e
 ## Development
 
 ```sh
-go test ./...
-go vet ./...
-go build ./cmd/braid
+./scripts/dev.sh test -race ./...
+./scripts/dev.sh vet ./...
+./scripts/dev.sh build -o bin/braid ./cmd/braid
+./scripts/verify-contract.sh
 ```
 
-CI is configured for Linux and Windows. The acceptance fixture generates 200 nodes, 600 edges and 40 labels and compares replay output with all four retrievers. Additional tests cover scope checks, atomic rollback, revision conflicts, deletion cleanup, reader snapshots, diversity, protocol validation, background jobs and negative metrics.
+CI runs the Bash helpers on Linux, including the race-enabled Go suite and subprocess contract checker. The acceptance fixture generates 200 nodes, 600 edges and 40 labels and compares replay output with all four retrievers. Additional tests cover scope checks, atomic rollback, revision conflicts, deletion cleanup, reader snapshots, diversity, protocol validation, background jobs and negative metrics.
 
-On Windows, `./scripts/verify-contract.ps1` exercises the subprocess against a fresh temporary database. No live Ollama instance is required for automated tests.
+The contract checker needs Bash, Go, `jq`, and GNU `timeout`. It builds a temporary binary and exercises the subprocess against a fresh temporary database with a 30-second watchdog. Scratch files are retained at the printed path for inspection. No live Ollama instance is required for automated tests.
 
 ## Current limits
 
@@ -135,7 +136,7 @@ On Windows, `./scripts/verify-contract.ps1` exercises the subprocess against a f
 - Snapshot-managed databases reject ingest/replay. Legacy replay removes unlogged direct upserts.
 - Query `at` pins recency; it is not a historical data cutoff. Record the dataset revision and source boundary too.
 - Dense search is brute force. Reindex builds are in memory; large-corpus memory and publication latency need measurement.
-- Postgres, ANN, context export, consumer outcome recording and learned reranking are not implemented.
+- Postgres, ANN, consumer outcome recording and learned reranking are not implemented.
 
 See [implementation decisions](docs/implementation.md), [verification notes](docs/verification.md) and the [roadmap](docs/roadmap.md).
 

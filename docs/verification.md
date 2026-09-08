@@ -1,6 +1,24 @@
 # Local verification
 
-Verified on Windows with the official Go 1.27.1 archive, downloaded into `.tools` and checked against the SHA-256 from Go's release metadata. The module declares Go 1.24. The CI workflow is provided for Linux and Windows; remote CI has not been run.
+## Current Linux/Omarchy workflow
+
+Use `./scripts/dev.sh` to run Go commands from the repository root and
+`./scripts/verify-contract.sh` for the executable subprocess checks. Both helpers
+use Bash. CI now targets Linux and runs shell syntax checks, race-enabled tests,
+vet, build, and the contract checker. The checker requires `jq` and GNU `timeout`,
+uses an isolated temporary database, retains its scratch files for inspection,
+and enforces a 30-second subprocess watchdog. The module requires Go 1.24+.
+
+The Bash checker passes all 12 checks on Omarchy, including when invoked outside
+the repository. Shell syntax checks, race-enabled tests, vet, and its binary
+build also pass locally. The updated remote CI workflow has not yet run.
+
+The sections below retain the earlier verification history; Windows tooling is
+no longer part of the current development or CI workflow.
+
+## Initial verification (Windows)
+
+The initial implementation was verified on Windows with the official Go 1.27.1 archive, downloaded into `.tools` and checked against the SHA-256 from Go's release metadata. At that time CI was configured for Linux and Windows; remote CI had not been run.
 
 - `go test ./...`: passes for library and CLI, including the generated 200-node / 600-edge / 40-label acceptance fixture.
 - `go vet ./...`: passes.
@@ -33,7 +51,7 @@ The Heimdall executable checker now also passes dataset binding, snapshot public
 ## Reindex and negative-evaluation follow-up
 
 Tests, vet and build pass. Added tests cover vector reuse/force, query/write responsiveness while generation is blocked, stale-build rejection, cancellation preserving vectors, background job requests, explicit no-answer semantics, evidence/min-score abstention, metric denominators, mixed-label grids, and full label persistence. The existing Heimdall executable checker still passes. Providers in concurrency tests are deterministic injected implementations; no live Ollama or real Heimdall calibration is claimed.
-# September 7 retrieval-contract verification
+## September 7 retrieval-contract verification
 
 The completed retrieval changes pass `go test -race ./...`, `go vet ./...`,
 `go build ./cmd/braid`, and `git diff --check` on Linux with Go 1.24.7.

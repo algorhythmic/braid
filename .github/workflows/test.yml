@@ -2,16 +2,21 @@ name: Test
 on: [push, pull_request]
 jobs:
   test:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      - run: go test ./...
-      - run: go vet ./...
-      - run: go build ./cmd/braid
+      - run: |
+          for script in scripts/*.sh; do
+            bash -n "$script"
+          done
+      - run: ./scripts/dev.sh test -race ./...
+      - run: ./scripts/dev.sh vet ./...
+      - run: ./scripts/dev.sh build -o bin/braid ./cmd/braid
+      - run: ./scripts/verify-contract.sh

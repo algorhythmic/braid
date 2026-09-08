@@ -25,6 +25,6 @@ Split held-out labels by conversation/artifact lineage. Include ambiguous/unassi
 
 Use one request at a time on the connection; background reindex runs independently. Match response IDs and protocol versions, reject invalid response shapes, and bound client buffers and deadlines. After a mutation timeout, inspect dataset state before retrying: timeout does not prove failure. Supervise the child and capture stderr separately.
 
-The [PowerShell contract checker](../scripts/verify-contract.ps1) checks negotiation, strict errors, retrieval, legacy replay, dataset identity, snapshot publication, stale-revision rejection and deletion in a fresh temporary database.
+The [Bash contract checker](../scripts/verify-contract.sh) checks negotiation, strict errors, retrieval, legacy replay, dataset identity, snapshot publication, stale-revision rejection and deletion in a fresh temporary database. Run `./scripts/verify-contract.sh` with Go, `jq`, and GNU `timeout` available; it retains the temporary binary, requests, responses, and database at the printed scratch path.
 
 References: [protocol](protocol.md), [dataset APIs](datasets.md), [reindex jobs](reindex.md), [grid search](grid-search.md), [negative evaluation](negative-evaluation.md).

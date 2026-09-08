@@ -5,6 +5,6 @@
 *.yml text eol=lf
 *.json text eol=lf
 *.jsonl text eol=lf
-*.ps1 text eol=lf
+*.sh text eol=lf
 go.mod text eol=lf
 go.sum text eol=lf
