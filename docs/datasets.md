@@ -46,3 +46,7 @@ Both mutation APIs require exact `dataset_id` and a nonnegative `expected_revisi
 Snapshot APIs reject databases with existing event logs. After first snapshot/apply publication, ingest/replay are disabled for that database, preventing replay from resurrecting deleted content or clearing the snapshot. Existing unlogged `upsert` remains available and advances revisions but has no expected-revision check: adapters should use `apply` instead. Legacy event-backed datasets retain their ingest/replay semantics.
 
 The subprocess's 16 MiB request limit still applies to full snapshots. Larger initial builds can use bounded apply requests in an unpublished database generation; publish that generation only when complete. There is no staged multi-request transaction API. Content hashing scans the published tables on each write. Reindex now reuses valid vectors and performs provider generation outside the Engine lock, with a revision check at publication; see [reindex](reindex.md). Large-corpus memory and publication latency still need measurement.
+
+Exact current-snapshot reads are available through `Engine.GetMany` / `get_many`.
+Queries and exact reads accept optional `expected_revision`, checked inside the
+read snapshot before provider work. See [read examples and ordering](retrieval-contract.md#exact-reads-and-revisions).

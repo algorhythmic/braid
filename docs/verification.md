@@ -33,3 +33,11 @@ The Heimdall executable checker now also passes dataset binding, snapshot public
 ## Reindex and negative-evaluation follow-up
 
 Tests, vet and build pass. Added tests cover vector reuse/force, query/write responsiveness while generation is blocked, stale-build rejection, cancellation preserving vectors, background job requests, explicit no-answer semantics, evidence/min-score abstention, metric denominators, mixed-label grids, and full label persistence. The existing Heimdall executable checker still passes. Providers in concurrency tests are deterministic injected implementations; no live Ollama or real Heimdall calibration is claimed.
+# September 7 retrieval-contract verification
+
+The completed retrieval changes pass `go test -race ./...`, `go vet ./...`,
+`go build ./cmd/braid`, and `git diff --check` on Linux with Go 1.24.7.
+A built-binary stdio smoke test also verified six complete responses covering
+negotiation, publication, a filtered dependency bundle, exact keys, bounded
+context export, and a stale-revision error. The catalog benchmark and its limits
+are recorded in [retrieval-benchmarks.md](retrieval-benchmarks.md).

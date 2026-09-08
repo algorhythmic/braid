@@ -23,4 +23,16 @@ B-01 through B-06 are implemented with tests, with B-03 enforced by immutable da
 
 Heimdall's adapter design must adopt the [version 1 protocol](protocol.md), [dataset/snapshot APIs](datasets.md), [background reindex](reindex.md) and [negative evaluation](negative-evaluation.md). Retain the pinned binary and supervised processes. Separate database generations remain useful for large full-corpus builds. Heimdall still owns calibrated assignment decisions and acceptance-time validation.
 
-Remaining broader work: context export and outcome recording, then real consumer benchmarks. Saga exporter and task ablations wait until Saga integration resumes. Postgres/ANN and learned reranking remain later work.
+Remaining broader work: consumer outcome recording and held-out consumer quality benchmarks. Projected context export is implemented. Saga exporter and task ablations wait until Saga integration resumes. Postgres/ANN and learned reranking remain later work.
+
+## Retrieval contract improvements (September 7, 2026)
+
+BRD-01 through BRD-08 from the computer-use backlog now have generic engine
+mechanisms and contract tests: hard eligibility, revision-bound exact reads,
+atomic required context, bounded projected export, diversity during admission,
+conditional stage reads, request deadlines, and optional evaluation gates.
+See [semantics and limits](retrieval-contract.md), the
+[implementation plan](retrieval-improvement-plan.md), and
+[benchmark results](retrieval-benchmarks.md). App-specific adapters, historical
+snapshot retention, token-exact rendering, non-cooperative provider preemption,
+and end-to-end action validation remain outside these engine changes.

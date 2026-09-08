@@ -7,7 +7,7 @@ Explainable retrieval that fits a budget. Braid combines lexical search, embeddi
 ## Features
 
 - Independent SQLite FTS5/BM25, brute-force cosine, anchor-seeded PageRank and recency retrieval.
-- Weighted reciprocal rank fusion, normalized MMR, and greedy budget packing, with explanations for every selected item.
+- Weighted reciprocal rank fusion and diversity-aware atomic dependency packing, with explanations for every selected item.
 - Text-only, anchor-only and combined queries; optional evidence gates and minimum fused scores.
 - One dataset per SQLite database, with immutable identity, transactional snapshots, revision-checked updates and node/edge deletion.
 - Validated embedding reuse and background reindex jobs with cancellation and stale-build protection.
@@ -138,3 +138,9 @@ On Windows, `./scripts/verify-contract.ps1` exercises the subprocess against a f
 - Postgres, ANN, context export, consumer outcome recording and learned reranking are not implemented.
 
 See [implementation decisions](docs/implementation.md), [verification notes](docs/verification.md) and the [roadmap](docs/roadmap.md).
+
+Constrained retrieval supports typed hard metadata filters, allowed IDs,
+revision-checked exact batch reads, required context, bounded projected JSON
+export, stage traces, and subprocess query deadlines. See the
+[retrieval contract](docs/retrieval-contract.md) for library/protocol examples,
+cost semantics, evaluation gates, and compatibility changes.

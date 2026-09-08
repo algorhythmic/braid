@@ -27,3 +27,8 @@ Full label metadata persists in `evaluation_labels`; the legacy `labels` table i
 Results include `abstained` and, when empty, an `abstention_reason`: `no_candidates`, `evidence_policy`, or `budget`. Empty output caused by filters or budget is also counted as abstention in evaluation. Explained raw rankings remain available for diagnosis.
 
 Raw retriever and RRF baselines retain their unfiltered ranked-list semantics; query abstention policy is measured on the full `braid` condition and grid trials. This exposes a recency-only baseline's false positives without silently applying a fused-score threshold to incomparable raw scores. Heimdall still owns calibrated assignment decisions, source-revision checks, and acceptance-time validation.
+
+Labels can now declare `forbidden_ids`, generic query dependencies/mandatory IDs,
+and an output projection/byte budget. Packed results report forbidden-hit,
+missing-required, and budget-overrun rates. Grid searches can reject violating
+trials through optional constraints. See [evaluation gates](retrieval-contract.md#evaluation-gates).
