@@ -2,7 +2,11 @@
 
 Explainable retrieval that fits a budget. Braid combines lexical search, embeddings, graph relationships and recency, then selects diverse context within a consumer-defined cost limit.
 
-**Status:** early implementation with a Go library, CLI, versioned subprocess protocol and evaluation harness. Heimdall is the active integration; Saga is deferred. Synthetic and contract tests pass. Warm lexical retrieval has been [benchmarked on 1,998 and 19,980 records](docs/retrieval-benchmarks.md); held-out consumer effectiveness and end-to-end deployment performance remain unverified.
+**Proof:** warm lexical query p50 cut 19–41× against Braid's earlier implementation on 2K–20K-record catalog fixtures (15–27× with vector diversity enabled), one desktop, latency only ([measurements](docs/retrieval-benchmarks.md)) · evaluation harness with grid search, no-answer cases, and forbidden-result, missing-context and budget gates
+
+**Part of:** an agent runtime, a collection of independent local tools with planned integrations, alongside [Heimdall](https://github.com/algorhythmic/heimdall) (task continuity) and [Wayland Computer Use](https://github.com/algorhythmic/wayland-computer-use) (guarded desktop actions). Braid is Heimdall's planned retrieval layer; Heimdall has a partial publish/query path, and its full adapter is not yet delivered.
+
+**Status:** early implementation with a Go library, CLI, versioned subprocess protocol and evaluation harness. Heimdall is the first consumer; Saga is deferred. Synthetic and contract tests pass. Warm lexical retrieval has been [benchmarked on 1,998 and 19,980 records](docs/retrieval-benchmarks.md); held-out consumer effectiveness and end-to-end deployment performance remain unverified.
 
 ## Features
 
@@ -179,3 +183,7 @@ The contract checker needs Bash, Go, `jq`, and GNU `timeout`. It builds a tempor
 - Postgres, ANN, consumer outcome recording and learned reranking are not implemented.
 
 See [implementation decisions](docs/implementation.md), [verification notes](docs/verification.md) and the [roadmap](docs/roadmap.md).
+
+## License
+
+[Apache License 2.0](LICENSE).
