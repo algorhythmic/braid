@@ -57,7 +57,9 @@ type Filters struct {
 	Predicate  *Predicate `json:"predicate,omitempty"`
 }
 type Query struct {
-	ExpectedRevision *int64 `json:"expected_revision,omitempty"`
+	// Package A: https://github.com/algorhythmic/muninn/blob/8bdda8b/docs/braid-integration/A-EMBEDDING-COMPATIBILITY.md
+	QueryEmbedding   *QueryEmbedding `json:"query_embedding,omitempty"`
+	ExpectedRevision *int64          `json:"expected_revision,omitempty"`
 	// Requires maps an item to IDs that must accompany it, transitively.
 	Requires        map[string][]string `json:"requires,omitempty"`
 	MandatoryIDs    []string            `json:"mandatory_ids,omitempty"`

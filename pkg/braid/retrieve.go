@@ -63,11 +63,14 @@ func (e *Engine) lexical(ctx context.Context, q Query, limit int) ([]Hit, error)
 	return out, rows.Err()
 }
 func (e *Engine) dense(ctx context.Context, q Query, nodes []Node, vs map[string][]float32, limit int) ([]Hit, error) {
-	if e.cfg.Embed.Provider == "none" && e.provider == nil {
+	// Package A: https://github.com/algorhythmic/muninn/blob/8bdda8b/docs/braid-integration/A-EMBEDDING-COMPATIBILITY.md
+	if q.QueryEmbedding == nil && e.cfg.Embed.Provider == "none" && e.provider == nil {
 		return []Hit{}, nil
 	}
 	var v []float32
-	if strings.TrimSpace(q.Text) != "" {
+	if q.QueryEmbedding != nil {
+		v = q.QueryEmbedding.Vector
+	} else if strings.TrimSpace(q.Text) != "" {
 		if e.provider == nil {
 			return nil, fmt.Errorf("text dense retrieval requires a provider")
 		}

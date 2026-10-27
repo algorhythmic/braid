@@ -18,7 +18,7 @@ import (
 const protocolVersion = 1
 const maxRequestBytes = 16 << 20
 
-var capabilities = []string{"query", "explain", "upsert", "ingest", "replay", "reindex", "eval", "strict_requests", "structured_errors", "dataset_binding", "replace_snapshot", "apply", "dataset", "reindex_start", "reindex_status", "reindex_cancel", "embedding_reuse", "negative_eval", "abstention_policy", "hard_filters", "allowed_ids", "get_many", "read_revision", "required_context", "context_export", "query_timeout", "stage_stats", "constrained_eval"}
+var capabilities = []string{"query", "explain", "upsert", "ingest", "replay", "reindex", "eval", "strict_requests", "structured_errors", "dataset_binding", "replace_snapshot", "apply", "dataset", "reindex_start", "reindex_status", "reindex_cancel", "embedding_reuse", "negative_eval", "abstention_policy", "hard_filters", "allowed_ids", "get_many", "read_revision", "required_context", "context_export", "query_timeout", "stage_stats", "constrained_eval", "query_embedding"}
 
 type request struct {
 	TimeoutMS            *int64              `json:"timeout_ms"`
@@ -337,6 +337,11 @@ func handleRequest(ctx context.Context, e *braid.Engine, b []byte, ready *bool, 
 	}
 	if err != nil {
 		code := "operation_failed"
+		// Package A: https://github.com/algorhythmic/muninn/blob/8bdda8b/docs/braid-integration/A-EMBEDDING-COMPATIBILITY.md
+		var embeddingErr *braid.EmbeddingIncompatibilityError
+		if errors.As(err, &embeddingErr) {
+			code = embeddingErr.Code
+		}
 		if errors.Is(err, braid.ErrRevisionConflict) {
 			code = "revision_conflict"
 		}
