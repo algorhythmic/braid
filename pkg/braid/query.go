@@ -111,6 +111,10 @@ func (e *Engine) queryOutput(ctx context.Context, q Query, output *Output) (Resu
 		return result, err
 	}
 	result.Dataset = state
+	// Package A: https://github.com/algorhythmic/muninn/blob/8bdda8b/docs/braid-integration/A-EMBEDDING-COMPATIBILITY.md
+	if err := e.validateQueryEmbedding(ctx, q); err != nil {
+		return result, err
+	}
 	weights := map[string]float64{}
 	for _, r := range retrieverNames {
 		weights[r] = e.cfg.Defaults.Weights[r]
@@ -338,6 +342,9 @@ func (r engineRetriever) retrieve(ctx context.Context, q Query, limit int) ([]Hi
 		return nil, err
 	}
 	if _, err := e.readRevision(ctx, q.ExpectedRevision); err != nil {
+		return nil, err
+	}
+	if err := e.validateQueryEmbedding(ctx, q); err != nil {
 		return nil, err
 	}
 	if limit <= 0 {
